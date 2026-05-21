@@ -1,6 +1,6 @@
 # samgov-watch
 
-**samgov-watch** monitors SAM.gov for government contracting opportunities relevant to a company's focus areas and automatically publishes them to collaboration destinations (Discord forum channels, SharePoint lists) where the team can discuss, track, and respond to them.
+**samgov-watch** searches SAM.gov for government contracting opportunities relevant to a company's focus areas and automatically publishes them to collaboration destinations (Discord forum channels, SharePoint lists) where the team can discuss, track, and respond to them.
 
 Configured search profiles define keyword queries and date windows. On each run the app fetches matching opportunities, enriches them with full descriptions and AI-generated summaries (via a local Ollama LLM), and syncs them to the configured destinations — creating new entries, updating changed ones, and closing items that fall out of scope. State is persisted locally so runs are idempotent and dedup is maintained across sessions.
 
