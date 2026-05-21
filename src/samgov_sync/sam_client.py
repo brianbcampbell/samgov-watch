@@ -6,7 +6,7 @@ import time
 from datetime import date, timedelta
 from random import choice
 from string import digits
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import httpx
 import requests
@@ -24,9 +24,9 @@ def _to_iso(mmddyyyy: str) -> str:
 
 def search(
     api_key: str,
-    params: dict,
+    params: dict[str, Any],
     progress: Optional[callable] = None,
-) -> Iterator[dict]:
+) -> Iterator[dict[str, Any]]:
     """
     Yield every opportunity matching *params* via SAM.gov full-text search.
 
@@ -87,27 +87,78 @@ def search(
         time.sleep(_PAGE_DELAY)
 
 
-def fetch_by_id(api_key: str, notice_id: str) -> Optional[dict]:
+def _get(url: str, params: dict[str, Any]) -> requests.Response:
+    """GET with automatic retry on 429 rate-limit responses."""
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from email.utils import parsedate_to_datetime
+
+    while True:
+        resp = requests.get(url, params=params, timeout=30)
+        if resp.status_code == 429:
+            raw = resp.headers.get("Retry-After", "")
+            resume = None
+            try:
+                resume = datetime.now(timezone.utc) + timedelta(seconds=float(raw))
+            except (ValueError, TypeError):
+                try:
+                    resume = parsedate_to_datetime(raw)
+                except Exception:
+                    pass
+            if resume:
+                print(f"SAM.gov rate limited — come back at {resume.astimezone().strftime('%H:%M')}")
+            else:
+                print("SAM.gov rate limited — quota exhausted, try again later")
+            sys.exit(1)
+        return resp
+
+
+def fetch_description(api_key: str, notice_id: str) -> str:
+    """Fetch the full description HTML for an opportunity."""
+    resp = _get(
+        "https://api.sam.gov/prod/opportunities/v1/noticedesc",
+        {"api_key": api_key, "noticeid": notice_id},
+    )
+    if not resp.ok:
+        return ""
+    try:
+        return resp.json().get("description", "")
+    except Exception:
+        return resp.text
+
+
+def fetch_by_id(api_key: str, notice_id: str) -> Optional[dict[str, Any]]:
     """Fetch a single opportunity by notice ID via the official API."""
     today = date.today()
     year_ago = today - timedelta(days=364)
-    resp = requests.get(
+    resp = _get(
         _API_BASE,
-        params={
+        {
             "api_key": api_key,
             "noticeid": notice_id,
             "postedFrom": year_ago.strftime("%m/%d/%Y"),
             "postedTo": today.strftime("%m/%d/%Y"),
             "limit": 1,
         },
-        timeout=30,
     )
     resp.raise_for_status()
     opps = resp.json().get("opportunitiesData", [])
-    return opps[0] if opps else None
+    if not opps:
+        return None
+    opp = opps[0]
+    # Official API returns description as a URL to a separate endpoint — fetch the real text
+    desc = opp.get("description", "")
+    if desc.startswith("http"):
+        try:
+            desc_resp = _get(desc, {"api_key": api_key})
+            if desc_resp.ok:
+                opp["description"] = desc_resp.text
+        except Exception:
+            opp["description"] = ""
+    return opp
 
 
-def _normalize(item: dict) -> dict:
+def _normalize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert an SGS result to the same shape as the official API response."""
     org_hierarchy = item.get("organizationHierarchy") or []
 

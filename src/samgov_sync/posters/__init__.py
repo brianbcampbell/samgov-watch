@@ -1,5 +1,6 @@
-from .base import Poster, SyncStats
-from .sharepoint import SharePointPoster
-from .discord import DiscordPoster
+from .base import Writer, SyncStats
+from .file import FileWriter
+from .discord import DiscordWriter
+from .sharepoint import SharePointWriter
 
-__all__ = ["Poster", "SyncStats", "SharePointPoster", "DiscordPoster"]
+__all__ = ["Writer", "SyncStats", "FileWriter", "DiscordWriter", "SharePointWriter"]

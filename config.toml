@@ -1,0 +1,25 @@
+[app]
+output = "discord"
+# profile = "my-profile"
+
+[discord]
+# state_file = "state/.discord_state.json"
+# worker_threads = 8
+
+[ollama]
+host = "http://machine3.local:11434"
+# model = "gemma4"
+
+[[searches]]
+name               = "gis"
+query              = "gis"
+days_back          = 90
+discord_channel_id = "1506436270887534622"
+# sharepoint_list_id = ""
+
+[[searches]]
+name               = "km"
+query              = "knowledge management"
+days_back          = 90
+discord_channel_id = "1506665829465587833"
+# sharepoint_list_id = ""

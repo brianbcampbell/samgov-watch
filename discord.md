@@ -1,6 +1,6 @@
 # Discord Integration Setup
 
-Each SAM.gov opportunity is posted as its own thread in a Discord **Forum channel**. The thread title is the opportunity title. The first message contains the full details — description, dates, type, office, department — as a rich embed. When an opportunity closes on SAM.gov, the bot edits the embed to grey and posts a closing notice in the thread. Team members can then archive the thread manually when discussion is done.
+Each SAM.gov opportunity is posted as its own thread in a Discord **Forum channel**. The thread contains two messages: a structured embed (type, dates, agency, link) and a follow-up plain-text reply with the full opportunity description. When an opportunity closes on SAM.gov, the bot edits the embed to grey and posts a closing notice. Team members can then archive the thread manually when discussion is done.
 
 ---
 
@@ -97,8 +97,8 @@ samgov-sync sync --output discord --dry-run
 
 | Event | What the bot does |
 |---|---|
-| New active opportunity | Creates a forum thread; starter message = full embed (blue) |
-| Opportunity data changed | Edits the starter message in-place (gold) |
+| New active opportunity | Creates a forum thread; embed (blue) + description reply |
+| Opportunity data changed | Edits embed (gold) + updates description reply if text changed |
 | No change since last run | Skipped silently |
 | Opportunity closed on SAM.gov | Edits embed to grey + posts a closing notice in the thread |
 | Done discussing | **You** archive the thread manually in Discord |

@@ -1,21 +1,29 @@
 """
-Environment-based credentials + TOML-based search profiles.
+Config loading for samgov-sync.
 
-Credentials (.env):
-    SAM_API_KEY                        — always required
-    SP_TENANT_ID, SP_CLIENT_ID,        — required for --output sharepoint
-      SP_CLIENT_SECRET, SP_SITE_ID,
-      SP_LIST_ID
-    DISCORD_BOT_TOKEN                  — required for --output discord
-    DISCORD_CHANNEL_ID                 — forum channel ID for --output discord
-    DISCORD_STATE_FILE                 — optional, default .discord_state.json
+Secrets (.env — never commit):
+    SAM_API_KEY                 — always required
+    DISCORD_BOT_TOKEN           — required for output = "discord"
+    SP_TENANT_ID, SP_CLIENT_ID,
+      SP_CLIENT_SECRET, SP_SITE_ID  — required for output = "sharepoint"
 
-Search profiles (searches.toml):
+Non-secret config (config.toml):
+    [app]
+        output = "discord"          # discord | sharepoint (default discord)
+        profile = "my-profile"      # optional; run only this named profile
+
+    [discord]
+        state_file = "state/.discord_state.json"
+        worker_threads = 8
+
+    [ollama]
+        host = "http://machine3.local:11434"
+        model = "gemma4"
+
     [[searches]]
-    name = "my-search"
-    query = "cybersecurity"
-    posted_from = "01/01/2025"
-    ...
+        name = "..."
+        query = "..."
+        ...
 """
 
 from __future__ import annotations
@@ -25,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -34,9 +42,22 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore[no-reattr]
 
+CONFIG_FILE = Path("config.toml")
+_ENV_FILE = Path(".env")
 
-def _load_env(env_file: Optional[Path]) -> None:
-    load_dotenv(env_file or Path(".env"))
+
+def load_toml(path: Path = CONFIG_FILE) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Config not found: {path}\n"
+            "Create config.toml with [app], [discord]/[ollama] sections and [[searches]] entries."
+        )
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
+def _load_env() -> None:
+    load_dotenv(_ENV_FILE)
 
 
 def _require(keys: list[str]) -> None:
@@ -49,16 +70,28 @@ def _require(keys: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-destination credential dataclasses
+# Config dataclasses
 # ---------------------------------------------------------------------------
+
+@dataclass
+class AppConfig:
+    profile: Optional[str]  # None = run all profiles
+
+    @classmethod
+    def from_toml(cls, data: dict[str, Any]) -> "AppConfig":
+        app = data.get("app", {})
+        return cls(
+            profile=app.get("profile") or None,
+        )
+
 
 @dataclass
 class SamConfig:
     api_key: str
 
     @classmethod
-    def from_env(cls, env_file: Optional[Path] = None) -> "SamConfig":
-        _load_env(env_file)
+    def from_env(cls) -> "SamConfig":
+        _load_env()
         _require(["SAM_API_KEY"])
         return cls(api_key=os.environ["SAM_API_KEY"])
 
@@ -71,8 +104,8 @@ class SharePointConfig:
     site_id: str
 
     @classmethod
-    def from_env(cls, env_file: Optional[Path] = None) -> "SharePointConfig":
-        _load_env(env_file)
+    def from_env(cls) -> "SharePointConfig":
+        _load_env()
         _require(["SP_TENANT_ID", "SP_CLIENT_ID", "SP_CLIENT_SECRET", "SP_SITE_ID"])
         return cls(
             tenant_id=os.environ["SP_TENANT_ID"],
@@ -85,34 +118,50 @@ class SharePointConfig:
 @dataclass
 class DiscordConfig:
     bot_token: str
-    channel_id: Optional[str]   # fallback; profiles may override with discord_channel_id
     state_file: Path
 
     @classmethod
-    def from_env(cls, env_file: Optional[Path] = None) -> "DiscordConfig":
-        _load_env(env_file)
+    def from_toml_and_env(cls, data: dict[str, Any]) -> "DiscordConfig":
+        _load_env()
         _require(["DISCORD_BOT_TOKEN"])
+        discord = data.get("discord", {})
         return cls(
             bot_token=os.environ["DISCORD_BOT_TOKEN"],
-            channel_id=os.getenv("DISCORD_CHANNEL_ID"),  # optional
-            state_file=Path(os.getenv("DISCORD_STATE_FILE", "state/.discord_state.json")),
+            state_file=Path(discord.get("state_file", "state/.discord_state.json")),
+        )
+
+
+@dataclass
+class OllamaConfig:
+    host: str
+    model: str
+
+    @classmethod
+    def from_toml(cls, data: dict[str, Any]) -> Optional["OllamaConfig"]:
+        """Return config if [ollama] host is set, else None."""
+        ollama = data.get("ollama", {})
+        host = ollama.get("host", "").strip()
+        if not host:
+            return None
+        return cls(
+            host=host,
+            model=ollama.get("model", "gemma4"),
         )
 
 
 # ---------------------------------------------------------------------------
-# Search profile (from searches.toml)
+# Search profile (from [[searches]] in config.toml)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class SearchProfile:
     name: str
-    queries: list  # one or more search terms; all run against the same destination
+    queries: list[str]
     posted_from: Optional[str] = None
     posted_to: Optional[str] = None
     days_back: Optional[int] = None
     ptype: Optional[str] = None
     active_only: bool = True
-    whole_word: bool = True
     discord_channel_id: Optional[str] = None
     sharepoint_list_id: Optional[str] = None
     q_mode: str = "EXACT"
@@ -131,7 +180,7 @@ class SearchProfile:
             today.strftime("%m/%d/%Y"),
         )
 
-    def as_sam_params(self, query: str) -> dict:
+    def as_sam_params(self, query: str) -> dict[str, str]:
         posted_from, posted_to = self._date_params()
         params = {
             "q": query,
@@ -144,7 +193,7 @@ class SearchProfile:
         return params
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SearchProfile":
+    def from_dict(cls, data: dict[str, Any]) -> "SearchProfile":
         if "queries" in data:
             queries = [str(q) for q in data["queries"]]
         elif "query" in data:
@@ -159,23 +208,15 @@ class SearchProfile:
             days_back=int(data["days_back"]) if "days_back" in data else None,
             ptype=data.get("ptype"),
             active_only=bool(data.get("active_only", True)),
-            whole_word=bool(data.get("whole_word", True)),
             discord_channel_id=str(data["discord_channel_id"]) if "discord_channel_id" in data else None,
             sharepoint_list_id=str(data["sharepoint_list_id"]) if "sharepoint_list_id" in data else None,
             q_mode=str(data.get("q_mode", "EXACT")).upper(),
         )
 
 
-def load_profiles(path: Path) -> list[SearchProfile]:
-    """Load all [[searches]] entries from a TOML file."""
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Search config not found: {path}\n"
-            "Copy searches.example.toml to searches.toml and define your searches."
-        )
-    with open(path, "rb") as fh:
-        data = tomllib.load(fh)
+def load_profiles(data: dict[str, Any]) -> list[SearchProfile]:
+    """Load all [[searches]] entries from an already-parsed config dict."""
     entries = data.get("searches", [])
     if not entries:
-        raise ValueError(f"No [[searches]] entries found in {path}")
+        raise ValueError("No [[searches]] entries found in config.toml")
     return [SearchProfile.from_dict(e) for e in entries]
