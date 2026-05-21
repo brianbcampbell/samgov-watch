@@ -18,5 +18,5 @@ name               = "km"
 query              = "\"knowledge management\""
 q_mode             = "EXACT"
 days_back          = 90
-discord_channel_id = "1506665829465587833"
+discord_channel_id = "1507112391467335792"
 # sharepoint_list_id = ""
