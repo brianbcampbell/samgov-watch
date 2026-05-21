@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 from .config import OllamaConfig, SearchProfile
 from .ollama_client import summarize as ollama_summarize
 from .posters.base import Writer, SyncStats, fingerprint
-from .sam_client import fetch_by_id, fetch_description
+from .sam_client import fetch_description
 from .sam_client import search as sam_search
 
 _FIELD_MAP = {
@@ -50,7 +50,7 @@ class Pipeline:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run_profiles(self, profile_writers: list[tuple]) -> SyncStats:
+    def run_profiles(self, profile_writers: list[tuple[SearchProfile, list[Writer]]]) -> SyncStats:
         self._load_writers()
         for profile, writers in profile_writers:
             self._progress("")
@@ -108,11 +108,13 @@ class Pipeline:
         to_check = tracked - seen
         if not to_check:
             return
-        self._progress(f"  Re-checking {len(to_check)} tracked item(s) outside search window...")
+        self._progress(f"  Closing {len(to_check)} item(s) no longer in search results...")
         for notice_id in to_check:
-            raw = fetch_by_id(self._api_key, notice_id)
-            if raw:
-                self._dispatch(self._enrich(raw), writers)
+            fields = _load_cached_opp(notice_id)
+            if not fields:
+                continue
+            fields["Active"] = "No"
+            self._dispatch(fields, writers)
 
     def _dispatch(self, fields: dict[str, Any], writers: list[Writer]) -> None:
         notice_id = fields.get("NoticeId", "")
@@ -136,11 +138,12 @@ class Pipeline:
     # Enrichment
     # ------------------------------------------------------------------
 
-    def _enrich(self, raw: dict[str, Any]) -> dict[str, Any]:
+    def _enrich(self, raw: dict[str, Any], summarize: bool = True) -> dict[str, Any]:
         fields = _to_fields(raw)
         cached = _load_cached_opp(fields.get("NoticeId", ""))
         self._apply_full_description(fields, cached)
-        self._apply_summary(fields, cached)
+        if summarize:
+            self._apply_summary(fields, cached)
         return fields
 
     def _apply_full_description(self, fields: dict[str, Any], cached: Optional[dict[str, Any]]) -> None:
@@ -156,8 +159,8 @@ class Pipeline:
 
     def _apply_summary(self, fields: dict[str, Any], cached: Optional[dict[str, Any]]) -> None:
         notice_id = fields.get("NoticeId", "")
-        if cached and cached.get("Summary"):
-            fields["Summary"] = cached.get("Summary", "")
+        if cached and "Summary" in cached:
+            fields["Summary"] = cached["Summary"]
             fields["Deliverables"] = cached.get("Deliverables", [])
         elif self._ollama_cfg:
             self._progress(f"  [ai] {notice_id}: summarizing…")

@@ -173,6 +173,8 @@ class DiscordWriter(Writer):
                 _save_json(self._state_file, self._state)
             if not was_closed and closed:
                 self.set_closed(notice_id, fields)
+            elif was_closed and not closed:
+                self.set_reopened(notice_id, fields)
 
         self._write_queue.put(_task)
 
@@ -183,14 +185,38 @@ class DiscordWriter(Writer):
             return
         thread_id = entry["thread_id"]
         try:
-            self._request(
+            resp = self._request(
                 "POST",
                 f"{_API}/channels/{thread_id}/messages",
                 json={"content": "This opportunity has been closed on SAM.gov."},
             )
+            with self._state_lock:
+                entry["closing_message_id"] = resp.json().get("id")
+                _save_json(self._state_file, self._state)
         except Exception as exc:
             print(f"  [!] {notice_id}: closing notice failed — {exc}")
         _add_closed_reaction(self, thread_id, entry["message_id"])
+
+    def set_reopened(self, notice_id: str, fields: dict[str, Any]) -> None:
+        """Remove ❌ reaction and closing notice when a previously-closed item reappears."""
+        entry = self._state.get(notice_id)
+        if not entry:
+            return
+        thread_id = entry["thread_id"]
+        emoji = urllib.parse.quote("❌")
+        try:
+            self._request("DELETE", f"{_API}/channels/{thread_id}/messages/{entry['message_id']}/reactions/{emoji}/@me")
+        except Exception as exc:
+            print(f"  [!] {notice_id}: remove reaction failed — {exc}")
+        closing_msg = entry.get("closing_message_id")
+        if closing_msg:
+            try:
+                self._request("DELETE", f"{_API}/channels/{thread_id}/messages/{closing_msg}")
+                with self._state_lock:
+                    del entry["closing_message_id"]
+                    _save_json(self._state_file, self._state)
+            except Exception as exc:
+                print(f"  [!] {notice_id}: delete closing notice failed — {exc}")
 
 
 # ------------------------------------------------------------------

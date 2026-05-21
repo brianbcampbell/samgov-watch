@@ -1,6 +1,10 @@
 # samgov-sync
 
-Search SAM.gov and sync results to a destination (SharePoint list or Discord channel). Duplicates are skipped; changed records are updated.
+**samgov-sync** monitors SAM.gov for government contracting opportunities relevant to a company's focus areas and automatically publishes them to collaboration destinations (Discord forum channels, SharePoint lists) where the team can discuss, track, and respond to them.
+
+Configured search profiles define keyword queries and date windows. On each run the app fetches matching opportunities, enriches them with full descriptions and AI-generated summaries (via a local Ollama LLM), and syncs them to the configured destinations — creating new entries, updating changed ones, and closing items that fall out of scope. State is persisted locally so runs are idempotent and dedup is maintained across sessions.
+
+**Skills demonstrated:** Python, SAM.gov REST API, Discord Bot API, Microsoft Graph API (SharePoint), local LLM integration (Ollama), background threading, incremental sync with fingerprint-based change detection, TOML/dotenv configuration, CLI tooling.
 
 ## Requirements
 

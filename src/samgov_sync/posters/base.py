@@ -112,6 +112,9 @@ class Writer(ABC):
     def set_closed(self, notice_id: str, fields: dict[str, Any]) -> None:
         """All destination-specific actions when an opportunity closes."""
 
+    def set_reopened(self, notice_id: str, fields: dict[str, Any]) -> None:
+        """Undo close actions when a previously-closed item reappears. No-op by default."""
+
     def load(self) -> None:
         """Load existing records from the destination. Called once by the pipeline."""
         print(f"  Loading existing records from {self.name}...")

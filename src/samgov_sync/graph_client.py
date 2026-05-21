@@ -18,7 +18,7 @@ class GraphClient:
             client_credential=client_secret,
         )
 
-    def _token(self) -> str:
+    def token(self) -> str:
         result = self._app.acquire_token_for_client(
             scopes=["https://graph.microsoft.com/.default"]
         )
@@ -30,7 +30,7 @@ class GraphClient:
 
     def _headers(self) -> dict[str, Any]:
         return {
-            "Authorization": f"Bearer {self._token()}",
+            "Authorization": f"Bearer {self.token()}",
             "Content-Type": "application/json",
         }
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 import requests as _requests
@@ -22,6 +25,7 @@ from .config import (
 )
 from .pipeline import Pipeline
 from .posters import DiscordWriter, FileWriter, SharePointWriter, SyncStats, Writer
+from .sam_client import search as sam_search
 
 console = Console()
 
@@ -33,6 +37,11 @@ def cli():
     cfg, app_cfg, ollama_cfg = _load_config()
     sam_cfg, discord_cfg, sp_cfg = _load_credentials(cfg)
     profiles = _select_profiles(cfg, app_cfg)
+
+    if app_cfg.query_only:
+        _check_sam(sam_cfg)
+        _run_query_only(sam_cfg, profiles)
+        return
 
     discord_cfg, sp_cfg = _startup_check(sam_cfg, ollama_cfg, discord_cfg, sp_cfg, profiles)
 
@@ -90,10 +99,12 @@ def _assemble_profile_writers(
     profiles: list[SearchProfile],
 ) -> list[tuple[SearchProfile, list[Writer]]]:
     file_writer = FileWriter()
+    discord_writers: dict[str, DiscordWriter] = {}
+    sp_writers: dict[str, SharePointWriter] = {}
     profile_writers: list[tuple[SearchProfile, list[Writer]]] = []
 
     for profile in profiles:
-        dests = _dest_writers_for_profile(discord_cfg, sp_cfg, profile)
+        dests = _dest_writers_for_profile(discord_cfg, sp_cfg, profile, discord_writers, sp_writers)
         if dests:
             profile_writers.append((profile, [file_writer, *dests]))
 
@@ -108,20 +119,28 @@ def _dest_writers_for_profile(
     discord_cfg: Optional[DiscordConfig],
     sp_cfg: Optional[SharePointConfig],
     profile: SearchProfile,
+    discord_writers: dict[str, DiscordWriter],
+    sp_writers: dict[str, SharePointWriter],
 ) -> list[Writer]:
     writers: list[Writer] = []
 
     if discord_cfg and profile.discord_channel_id:
-        state_file = discord_cfg.state_file.with_stem(
-            f"{discord_cfg.state_file.stem}_{profile.discord_channel_id}"
-        )
-        writers.append(DiscordWriter(discord_cfg.bot_token, profile.discord_channel_id, state_file))
+        cid = profile.discord_channel_id
+        if cid not in discord_writers:
+            discord_writers[cid] = DiscordWriter(
+                discord_cfg.bot_token, cid,
+                Path(f"state/.discord_state_{cid}.json"),
+            )
+        writers.append(discord_writers[cid])
 
     if sp_cfg and profile.sharepoint_list_id:
-        writers.append(SharePointWriter(
-            sp_cfg.tenant_id, sp_cfg.client_id, sp_cfg.client_secret,
-            sp_cfg.site_id, profile.sharepoint_list_id,
-        ))
+        lid = profile.sharepoint_list_id
+        if lid not in sp_writers:
+            sp_writers[lid] = SharePointWriter(
+                sp_cfg.tenant_id, sp_cfg.client_id, sp_cfg.client_secret,
+                sp_cfg.site_id, lid,
+            )
+        writers.append(sp_writers[lid])
 
     return writers
 
@@ -139,6 +158,26 @@ def _run_pipeline(
         progress=console.print,
     )
     return pipeline.run_profiles(profile_writers)
+
+
+def _run_query_only(sam_cfg: Optional[SamConfig], profiles: list[SearchProfile]) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = Path("state/query")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"query_{timestamp}.json"
+    entries: list[dict[str, Any]] = []
+
+    for profile in profiles:
+        for query in profile.queries:
+            console.print(f"  [{profile.name}] query: {query!r}  mode: {profile.q_mode}")
+            params = profile.as_sam_params(query)
+            results = list(sam_search(sam_cfg.api_key if sam_cfg else "", params, progress=console.print))
+            console.print(f"    → {len(results)} results")
+            entries.append({"profile": profile.name, "query": query, "q_mode": profile.q_mode, "results": results})
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(entries, fh, indent=2, ensure_ascii=False)
+    console.print(f"\n[green]Saved {out_path}[/green]")
 
 
 def _unique_writers(profile_writers: list[tuple[SearchProfile, list[Writer]]]) -> list[Writer]:
@@ -230,7 +269,7 @@ def _check_sharepoint(sp_cfg: Optional[SharePointConfig]) -> Optional[SharePoint
     console.print("    Credentials  [green]present[/green]")
     try:
         from .graph_client import GraphClient
-        GraphClient(sp_cfg.tenant_id, sp_cfg.client_id, sp_cfg.client_secret)._token()
+        GraphClient(sp_cfg.tenant_id, sp_cfg.client_id, sp_cfg.client_secret).token()
         console.print("    Connection   [green]authenticated[/green]")
         return sp_cfg
     except Exception as exc:

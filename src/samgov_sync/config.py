@@ -76,12 +76,14 @@ def _require(keys: list[str]) -> None:
 @dataclass
 class AppConfig:
     profile: Optional[str]  # None = run all profiles
+    query_only: bool = False
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> "AppConfig":
         app = data.get("app", {})
         return cls(
             profile=app.get("profile") or None,
+            query_only=bool(app.get("query_only", False)),
         )
 
 
@@ -118,17 +120,12 @@ class SharePointConfig:
 @dataclass
 class DiscordConfig:
     bot_token: str
-    state_file: Path
 
     @classmethod
-    def from_toml_and_env(cls, data: dict[str, Any]) -> "DiscordConfig":
+    def from_toml_and_env(cls, _data: dict[str, Any]) -> "DiscordConfig":
         _load_env()
         _require(["DISCORD_BOT_TOKEN"])
-        discord = data.get("discord", {})
-        return cls(
-            bot_token=os.environ["DISCORD_BOT_TOKEN"],
-            state_file=Path(discord.get("state_file", "state/.discord_state.json")),
-        )
+        return cls(bot_token=os.environ["DISCORD_BOT_TOKEN"])
 
 
 @dataclass
@@ -166,7 +163,7 @@ class SearchProfile:
     sharepoint_list_id: Optional[str] = None
     q_mode: str = "EXACT"
 
-    def _date_params(self) -> tuple:
+    def _date_params(self) -> tuple[str, str]:
         today = date.today()
         if self.days_back is not None:
             return (

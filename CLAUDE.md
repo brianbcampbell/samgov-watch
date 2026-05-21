@@ -95,7 +95,7 @@ Driven entirely by which IDs are configured per profile — no top-level `output
 
 [ollama]
 host = "http://machine3.local:11434"
-# model = "gemma4"                           # default shown
+model = "gemma4"        
 
 [[searches]]
 name               = "gis"           # used with app.profile
