@@ -79,7 +79,8 @@ class GraphClient:
         resp = requests.post(
             url, headers=self._headers(), json={"fields": fields}, timeout=30
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            raise requests.HTTPError(f"{resp.status_code} {resp.reason}: {resp.text}", response=resp)
         return resp.json()
 
     def update_item(

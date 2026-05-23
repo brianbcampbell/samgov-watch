@@ -79,7 +79,7 @@ Driven entirely by which IDs are configured per profile — no top-level `output
 
 ## Config files
 
-- `config.toml` — all non-secret config (gitignored); create with `[app]`, `[discord]`, `[ollama]` sections and `[[searches]]` entries
+- `config.toml` — all non-secret config (gitignored); create with `[app]`, `[discord]`, `[ollama]` sections and `[[search]]` entries
 - `.env` — secrets only (gitignored): `SAM_API_KEY`, `DISCORD_BOT_TOKEN`, SP credentials
 - `state/` — auto-created; holds `state/opps/<id>.json` and per-channel Discord state files (gitignored)
 - Python 3.9–3.10 requires the `tomli` backport; 3.11+ uses stdlib `tomllib`
@@ -97,13 +97,13 @@ Driven entirely by which IDs are configured per profile — no top-level `output
 host = "http://machine3.local:11434"
 model = "gemma4"        
 
-[[searches]]
+[[search]]
 name               = "gis"           # used with app.profile
 query              = "gis"           # single search term
 days_back          = 90
 discord_channel_id = "123456789"
 
-[[searches]]
+[[search]]
 name               = "km"
 queries            = ["knowledge management", "KM"]  # multiple terms, same channel, deduped
 days_back          = 90
@@ -117,4 +117,4 @@ discord_channel_id = "987654321"
 sharepoint_list_id = "abc123"
 ```
 
-All `[[searches]]` fields except `name` and `query`/`queries` are optional. `posted_from`/`posted_to` (MM/DD/YYYY) can be used instead of `days_back`.
+All `[[search]]` fields except `name` and `query`/`queries` are optional. `posted_from`/`posted_to` (MM/DD/YYYY) can be used instead of `days_back`.

@@ -2,27 +2,21 @@
 Config loading for samgov-sync.
 
 Secrets (.env — never commit):
-    SAM_API_KEY                 — always required
-    DISCORD_BOT_TOKEN           — required for output = "discord"
+    DISCORD_BOT_TOKEN           — required for Discord output
     SP_TENANT_ID, SP_CLIENT_ID,
-      SP_CLIENT_SECRET, SP_SITE_ID  — required for output = "sharepoint"
+      SP_CLIENT_SECRET, SP_SITE_ID  — required for SharePoint output
 
 Non-secret config (config.toml):
     [app]
-        output = "discord"          # discord | sharepoint (default discord)
         profile = "my-profile"      # optional; run only this named profile
-
-    [discord]
-        state_file = "state/.discord_state.json"
-        worker_threads = 8
 
     [ollama]
         host = "http://machine3.local:11434"
         model = "gemma4"
 
-    [[searches]]
+    [[search]]
         name = "..."
-        query = "..."
+        url  = "https://sam.gov/search/?..."
         ...
 """
 
@@ -50,7 +44,7 @@ def load_toml(path: Path = CONFIG_FILE) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f"Config not found: {path}\n"
-            "Create config.toml with [app], [discord]/[ollama] sections and [[searches]] entries."
+            "Create config.toml with [app], [discord]/[ollama] sections and [[search]] entries."
         )
     with open(path, "rb") as fh:
         return tomllib.load(fh)
@@ -85,17 +79,6 @@ class AppConfig:
             profile=app.get("profile") or None,
             query_only=bool(app.get("query_only", False)),
         )
-
-
-@dataclass
-class SamConfig:
-    api_key: str
-
-    @classmethod
-    def from_env(cls) -> "SamConfig":
-        _load_env()
-        _require(["SAM_API_KEY"])
-        return cls(api_key=os.environ["SAM_API_KEY"])
 
 
 @dataclass
@@ -147,21 +130,18 @@ class OllamaConfig:
 
 
 # ---------------------------------------------------------------------------
-# Search profile (from [[searches]] in config.toml)
+# Search profile (from [[search]] in config.toml)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class SearchProfile:
     name: str
-    queries: list[str]
+    url: str
     posted_from: Optional[str] = None
     posted_to: Optional[str] = None
     days_back: Optional[int] = None
-    ptype: Optional[str] = None
-    active_only: bool = True
     discord_channel_id: Optional[str] = None
     sharepoint_list_id: Optional[str] = None
-    q_mode: str = "EXACT"
 
     def _date_params(self) -> tuple[str, str]:
         today = date.today()
@@ -177,43 +157,27 @@ class SearchProfile:
             today.strftime("%m/%d/%Y"),
         )
 
-    def as_sam_params(self, query: str) -> dict[str, str]:
-        posted_from, posted_to = self._date_params()
-        params = {
-            "q": query,
-            "q_mode": self.q_mode,
-            "postedFrom": posted_from,
-            "postedTo": posted_to,
-        }
-        if self.ptype:
-            params["ptype"] = self.ptype
-        return params
+    def date_range(self) -> tuple[str, str]:
+        return self._date_params()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SearchProfile":
-        if "queries" in data:
-            queries = [str(q) for q in data["queries"]]
-        elif "query" in data:
-            queries = [str(data["query"])]
-        else:
-            raise ValueError(f"Profile '{data.get('name', '?')}' must have 'query' or 'queries'")
+        if "url" not in data:
+            raise ValueError(f"Profile '{data.get('name', '?')}' must have a 'url' field (paste a SAM.gov search URL)")
         return cls(
             name=data["name"],
-            queries=queries,
+            url=data["url"],
             posted_from=data.get("posted_from"),
             posted_to=data.get("posted_to"),
             days_back=int(data["days_back"]) if "days_back" in data else None,
-            ptype=data.get("ptype"),
-            active_only=bool(data.get("active_only", True)),
             discord_channel_id=str(data["discord_channel_id"]) if "discord_channel_id" in data else None,
             sharepoint_list_id=str(data["sharepoint_list_id"]) if "sharepoint_list_id" in data else None,
-            q_mode=str(data.get("q_mode", "EXACT")).upper(),
         )
 
 
 def load_profiles(data: dict[str, Any]) -> list[SearchProfile]:
-    """Load all [[searches]] entries from an already-parsed config dict."""
-    entries = data.get("searches", [])
+    """Load all [[search]] entries from an already-parsed config dict."""
+    entries = data.get("search", [])
     if not entries:
-        raise ValueError("No [[searches]] entries found in config.toml")
+        raise ValueError("No [[search]] entries found in config.toml")
     return [SearchProfile.from_dict(e) for e in entries]

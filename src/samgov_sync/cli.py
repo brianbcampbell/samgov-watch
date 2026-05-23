@@ -17,7 +17,6 @@ from .config import (
     AppConfig,
     DiscordConfig,
     OllamaConfig,
-    SamConfig,
     SearchProfile,
     SharePointConfig,
     load_profiles,
@@ -35,18 +34,17 @@ _DISCORD_API = "https://discord.com/api/v10"
 def cli():
     """Search SAM.gov and sync results to a destination."""
     cfg, app_cfg, ollama_cfg = _load_config()
-    sam_cfg, discord_cfg, sp_cfg = _load_credentials(cfg)
     profiles = _select_profiles(cfg, app_cfg)
 
     if app_cfg.query_only:
-        _check_sam(sam_cfg)
-        _run_query_only(sam_cfg, profiles)
+        _run_query_only(profiles)
         return
 
-    discord_cfg, sp_cfg = _startup_check(sam_cfg, ollama_cfg, discord_cfg, sp_cfg, profiles)
+    discord_cfg, sp_cfg = _load_credentials(cfg)
+    discord_cfg, sp_cfg = _startup_check(ollama_cfg, discord_cfg, sp_cfg, profiles)
 
     profile_writers = _assemble_profile_writers(discord_cfg, sp_cfg, profiles)
-    stats = _run_pipeline(sam_cfg, ollama_cfg, profile_writers)
+    stats = _run_pipeline(ollama_cfg, profile_writers)
     _print_stats(stats)
 
 
@@ -63,7 +61,7 @@ def _load_config() -> tuple[dict[str, Any], AppConfig, Optional[OllamaConfig]]:
         sys.exit(1)
 
 
-def _load_credentials(cfg: dict[str, Any]) -> tuple[Optional[SamConfig], Optional[DiscordConfig], Optional[SharePointConfig]]:
+def _load_credentials(cfg: dict[str, Any]) -> tuple[Optional[DiscordConfig], Optional[SharePointConfig]]:
     def _try(fn):
         try:
             return fn()
@@ -71,7 +69,6 @@ def _load_credentials(cfg: dict[str, Any]) -> tuple[Optional[SamConfig], Optiona
             return None
 
     return (
-        _try(SamConfig.from_env),
         _try(lambda: DiscordConfig.from_toml_and_env(cfg)),
         _try(SharePointConfig.from_env),
     )
@@ -146,13 +143,11 @@ def _dest_writers_for_profile(
 
 
 def _run_pipeline(
-    sam_cfg: SamConfig,
     ollama_cfg: Optional[OllamaConfig],
     profile_writers: list[tuple[SearchProfile, list[Writer]]],
 ) -> SyncStats:
     all_writers = _unique_writers(profile_writers)
     pipeline = Pipeline(
-        sam_api_key=sam_cfg.api_key,
         ollama_cfg=ollama_cfg,
         writers=all_writers,
         progress=console.print,
@@ -160,7 +155,7 @@ def _run_pipeline(
     return pipeline.run_profiles(profile_writers)
 
 
-def _run_query_only(sam_cfg: Optional[SamConfig], profiles: list[SearchProfile]) -> None:
+def _run_query_only(profiles: list[SearchProfile]) -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("state/query")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -168,12 +163,11 @@ def _run_query_only(sam_cfg: Optional[SamConfig], profiles: list[SearchProfile])
     entries: list[dict[str, Any]] = []
 
     for profile in profiles:
-        for query in profile.queries:
-            console.print(f"  [{profile.name}] query: {query!r}  mode: {profile.q_mode}")
-            params = profile.as_sam_params(query)
-            results = list(sam_search(sam_cfg.api_key if sam_cfg else "", params, progress=console.print))
-            console.print(f"    → {len(results)} results")
-            entries.append({"profile": profile.name, "query": query, "q_mode": profile.q_mode, "results": results})
+        console.print(f"  [{profile.name}] {profile.url}")
+        posted_from, posted_to = profile.date_range()
+        results = list(sam_search(profile.url, posted_from, posted_to, progress=console.print))
+        console.print(f"    → {len(results)} results")
+        entries.append({"profile": profile.name, "url": profile.url, "results": results})
 
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(entries, fh, indent=2, ensure_ascii=False)
@@ -196,7 +190,6 @@ def _unique_writers(profile_writers: list[tuple[SearchProfile, list[Writer]]]) -
 # ------------------------------------------------------------------
 
 def _startup_check(
-    sam_cfg: Optional[SamConfig],
     ollama_cfg: Optional[OllamaConfig],
     discord_cfg: Optional[DiscordConfig],
     sp_cfg: Optional[SharePointConfig],
@@ -204,7 +197,6 @@ def _startup_check(
 ) -> tuple[Optional[DiscordConfig], Optional[SharePointConfig]]:
     console.print("\n[bold]Startup[/bold]")
 
-    _check_sam(sam_cfg)
     _check_ollama(ollama_cfg)
     discord_cfg = _check_discord(discord_cfg)
     sp_cfg = _check_sharepoint(sp_cfg)
@@ -212,15 +204,6 @@ def _startup_check(
 
     console.print()
     return discord_cfg, sp_cfg
-
-
-def _check_sam(sam_cfg: Optional[SamConfig]) -> None:
-    console.print("\n  [bold]SAM.gov[/bold]")
-    if sam_cfg:
-        console.print("    API key      [green]present[/green]")
-    else:
-        console.print("    API key      [red]missing — set SAM_API_KEY in .env[/red]")
-        sys.exit(1)
 
 
 def _check_ollama(ollama_cfg: Optional[OllamaConfig]) -> None:
@@ -283,6 +266,7 @@ def _print_profiles(profiles: list[SearchProfile]) -> None:
         d = p.discord_channel_id or "—"
         s = p.sharepoint_list_id or "—"
         console.print(f"    {p.name:<20} discord: {d:<22} sharepoint: {s}")
+        console.print(f"    {'':20} url: {p.url[:80]}")
 
 
 # ------------------------------------------------------------------

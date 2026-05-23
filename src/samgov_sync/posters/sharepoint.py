@@ -48,14 +48,14 @@ class SharePointWriter(Writer):
     def _create(self, fields: dict[str, Any]) -> None:
         if not self._list_id:
             return
-        self._client.create_item(self._site_id, self._list_id, fields)
+        self._client.create_item(self._site_id, self._list_id, _sp_fields(fields))
         if is_closed(fields):
             self.set_closed(fields.get("NoticeId", ""), fields)
 
     def _update(self, backend_id: str, fields: dict[str, Any]) -> None:
         if not self._list_id:
             return
-        self._client.update_item(self._site_id, self._list_id, backend_id, fields)
+        self._client.update_item(self._site_id, self._list_id, backend_id, _sp_fields(fields))
         if is_closed(fields):
             self.set_closed(backend_id, fields)
 
@@ -73,5 +73,19 @@ class SharePointWriter(Writer):
 _TRACKED_COLUMNS = [
     "Title", "NoticeId", "SolicitationNumber", "Department", "OfficeAddress",
     "PostedDate", "ResponseDeadline", "SetAside", "NaicsCode", "OpportunityType",
-    "Active", "UiLink", "Description",
+    "Active", "UiLink", "Description", "Summary", "Deliverables",
 ]
+
+
+def _sp_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """Filter to known columns and coerce all values to strings."""
+    out: dict[str, Any] = {}
+    for col in _TRACKED_COLUMNS:
+        val = fields.get(col)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            out[col] = "\n".join(str(v) for v in val)
+        else:
+            out[col] = str(val)
+    return out

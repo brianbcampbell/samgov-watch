@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .config import OllamaConfig, SearchProfile
 from .ollama_client import summarize as ollama_summarize
 from .posters.base import Writer, SyncStats, fingerprint
-from .sam_client import fetch_description
 from .sam_client import search as sam_search
 
 _FIELD_MAP = {
@@ -36,12 +34,10 @@ _OPPS_DIR = Path("state/opps")
 class Pipeline:
     def __init__(
         self,
-        sam_api_key: str,
         ollama_cfg: Optional[OllamaConfig],
         writers: list[Writer],
         progress: Callable[[str], None] = print,
     ):
-        self._api_key = sam_api_key
         self._ollama_cfg = ollama_cfg
         self._writers = writers
         self._progress = progress
@@ -88,17 +84,15 @@ class Pipeline:
         self._monitor_and_dispatch(seen, writers)
 
     def _search_and_dispatch(self, profile: SearchProfile, writers: list[Writer]) -> set[str]:
-        self._progress(f"[{profile.name}] Searching SAM.gov: queries={profile.queries}")
+        self._progress(f"[{profile.name}] Searching SAM.gov...")
         seen: set[str] = set()
-        for query in profile.queries:
-            for raw in sam_search(self._api_key, profile.as_sam_params(query), progress=self._progress):
-                if profile.active_only and raw.get("active", "").upper() != "YES":
-                    continue
-                notice_id = raw.get("noticeId")
-                if not notice_id or notice_id in seen:
-                    continue
-                seen.add(notice_id)
-                self._dispatch(self._enrich(raw), writers)
+        posted_from, posted_to = profile.date_range()
+        for raw in sam_search(profile.url, posted_from, posted_to, progress=self._progress):
+            notice_id = raw.get("noticeId")
+            if not notice_id or notice_id in seen:
+                continue
+            seen.add(notice_id)
+            self._dispatch(self._enrich(raw), writers)
         return seen
 
     def _monitor_and_dispatch(self, seen: set[str], writers: list[Writer]) -> None:
@@ -121,18 +115,17 @@ class Pipeline:
         results = [(w, *w.handle(fields)) for w in writers]
         actions = [action for _, action, _ in results]
 
+        errors = [(w, detail) for w, action, detail in results if action == "error"]
+        for w, detail in errors:
+            self._progress(f"  [!] {notice_id}: {w.name} failed — {detail}")
+
         if "created" in actions:
             self._progress(f"  [+] {notice_id}: {fields.get('Title', '')[:70]}")
+            for writer, action, detail in results:
+                if action in ("created", "updated"):
+                    self._progress(f"      {writer.name:<12} ok")
         elif "updated" in actions:
             self._progress(f"  [~] {notice_id}: updated")
-        else:
-            return
-
-        for writer, action, detail in results:
-            if action == "error":
-                self._progress(f"      {writer.name:<12} failed — {detail}")
-            elif action in ("created", "updated"):
-                self._progress(f"      {writer.name:<12} ok")
 
     # ------------------------------------------------------------------
     # Enrichment
@@ -141,21 +134,9 @@ class Pipeline:
     def _enrich(self, raw: dict[str, Any], summarize: bool = True) -> dict[str, Any]:
         fields = _to_fields(raw)
         cached = _load_cached_opp(fields.get("NoticeId", ""))
-        self._apply_full_description(fields, cached)
         if summarize:
             self._apply_summary(fields, cached)
         return fields
-
-    def _apply_full_description(self, fields: dict[str, Any], cached: Optional[dict[str, Any]]) -> None:
-        notice_id = fields.get("NoticeId", "")
-        if cached and cached.get("DescriptionFull"):
-            fields["Description"] = cached["Description"]
-            fields["DescriptionFull"] = True
-        elif self._api_key and notice_id:
-            html = fetch_description(self._api_key, notice_id)
-            if html:
-                fields["Description"] = _clean_description(html)
-                fields["DescriptionFull"] = True
 
     def _apply_summary(self, fields: dict[str, Any], cached: Optional[dict[str, Any]]) -> None:
         notice_id = fields.get("NoticeId", "")
@@ -175,39 +156,12 @@ class Pipeline:
 # Field mapping
 # ------------------------------------------------------------------
 
-class _HTMLStripper(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts).strip()
-
-
-def _clean_description(text: str) -> str:
-    if not text:
-        return ""
-    text = text.strip()
-    if text.startswith("http"):
-        return ""
-    if "<" in text:
-        s = _HTMLStripper()
-        s.feed(text)
-        return s.get_text()
-    return text
-
-
 def _to_fields(opp: dict[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for dest_key, src_key in _FIELD_MAP.items():
         val = opp.get(src_key) or ""
         if dest_key == "Title":
             val = str(val)[:_TITLE_MAX]
-        elif dest_key == "Description":
-            val = _clean_description(str(val) if not isinstance(val, str) else val)
         fields[dest_key] = str(val) if not isinstance(val, str) else val
     notice_id = opp.get("noticeId", "")
     fields["UiLink"] = opp.get("uiLink") or (_SAM_OPP_URL.format(notice_id) if notice_id else "")

@@ -88,9 +88,12 @@ class Writer(ABC):
     Writers own their internal queues. The pipeline never knows about them.
     """
 
+    _ERROR_LIMIT = 3
+
     def __init__(self) -> None:
         self._existing: dict[str, tuple[str, str]] = {}
         self.stats = SyncStats()
+        self._consecutive_errors = 0
 
     @property
     @abstractmethod
@@ -131,17 +134,24 @@ class Writer(ABC):
                 self._create(fields)
                 self._existing[notice_id] = (fp, notice_id)
                 self.stats.created += 1
+                self._consecutive_errors = 0
                 return "created", ""
             elif self._existing[notice_id][0] != fp:
                 self._update(self._existing[notice_id][1], fields)
                 self._existing[notice_id] = (fp, self._existing[notice_id][1])
                 self.stats.updated += 1
+                self._consecutive_errors = 0
                 return "updated", ""
             else:
                 self.stats.skipped += 1
                 return "skipped", ""
         except Exception as exc:
             self.stats.errors += 1
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= self._ERROR_LIMIT:
+                raise RuntimeError(
+                    f"{self.name} writer failed {self._ERROR_LIMIT} times in a row — aborting run. Last error: {exc}"
+                ) from exc
             return "error", str(exc)
 
     def flush(self) -> None:

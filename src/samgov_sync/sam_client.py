@@ -1,66 +1,91 @@
-"""SAM.gov search via SGS (full-text) + official API for individual lookups."""
+"""SAM.gov search via SGS (full-text search, same backend as public website)."""
 
 from __future__ import annotations
 
+import re
 import time
-from datetime import date, timedelta
 from random import choice
 from string import digits
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
+from urllib.parse import urlparse, unquote
 
 import httpx
-import requests
 
 _SGS_BASE = "https://sam.gov/api/prod/sgs/v1/search/"
-_API_BASE = "https://api.sam.gov/opportunities/v2/search"
 _PAGE_DELAY = 0.3
 
 
 def _to_iso(mmddyyyy: str) -> str:
-    """Convert MM/DD/YYYY to ISO 8601 with timezone for the SGS endpoint."""
     m, d, y = mmddyyyy.split("/")
     return f"{y}-{m}-{d}T00:00:00-06:00"
 
 
+def parse_sam_url(url: str) -> dict[str, Any]:
+    """Parse a SAM.gov search URL into a normalised params dict."""
+    pairs: dict[str, str] = {}
+    for part in urlparse(url).query.split("&"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            pairs[unquote(k)] = unquote(v)
+        else:
+            pairs[unquote(part)] = ""
+
+    tags: dict[int, str] = {}
+    for k, v in pairs.items():
+        m = re.match(r"sfm\[simpleSearch\]\[keywordTags\]\[(\d+)\]\[value\]$", k)
+        if m:
+            tags[int(m.group(1))] = v
+
+    editor_q = pairs.get("sfm[simpleSearch][keywordEditorTextarea]", "").strip()
+    result: dict[str, Any] = {
+        "q":         editor_q if editor_q else " ".join(tags[i] for i in sorted(tags)),
+        "q_mode":    pairs.get("sfm[simpleSearch][keywordRadio]", "ALL").upper(),
+        "is_active": pairs.get("sfm[status][is_active]", "true").lower() == "true",
+    }
+    notice_type = pairs.get("sfm[notices][noticeType]")
+    if notice_type:
+        result["ptype"] = notice_type
+    return result
+
+
+def make_sgs_url(params: dict[str, Any], page: int = 0) -> str:
+    """Build a paginated SGS request URL from a normalised params dict."""
+    seed = "".join(choice(digits) for _ in range(13))
+    is_active = str(params.get("is_active", True)).lower()
+    url = (
+        f"{_SGS_BASE}?random={seed}&index=opp"
+        f"&page={page}&sort=-modifiedDate&size=1000"
+        f"&mode=search&responseType=json"
+        f"&qMode={params.get('q_mode', 'ALL')}&is_active={is_active}"
+    )
+    if params.get("postedFrom"):
+        url += f"&modified_date.from={_to_iso(params['postedFrom'])}"
+    if params.get("postedTo"):
+        url += f"&modified_date.to={_to_iso(params['postedTo'])}"
+    url += f"&q={params.get('q', '')}"
+    if params.get("ptype"):
+        url += f"&notice_type={params['ptype']}"
+    return url
+
+
 def search(
-    api_key: str,
-    params: dict[str, Any],
-    progress: Optional[callable] = None,
+    sam_url: str,
+    posted_from: str = "",
+    posted_to: str = "",
+    progress: Optional[Callable[[str], None]] = None,
 ) -> Iterator[dict[str, Any]]:
-    """
-    Yield every opportunity matching *params* via SAM.gov full-text search.
-
-    Uses the SGS endpoint (same one the SAM.gov website uses), so queries
-    match against titles AND descriptions. No API key required for SGS.
-
-    Recognised params:
-        q           — search query (full text)
-        q_mode      — ALL | ANY | EXACT (default EXACT)
-        postedFrom  — MM/DD/YYYY
-        postedTo    — MM/DD/YYYY
-        ptype       — notice type code (o, k, r, p, a, s, u, g, i)
-    """
-    q = params.get("q", "")
-    q_mode = params.get("q_mode", "EXACT")
-    posted_from = params.get("postedFrom", "")
-    posted_to = params.get("postedTo", "")
-    ptype = params.get("ptype")
-
+    """Yield every opportunity matching the SAM.gov search URL via the SGS endpoint."""
+    
+    params = parse_sam_url(sam_url)
+    if posted_from: params["postedFrom"] = posted_from
+    if posted_to:   params["postedTo"]   = posted_to
+    
     page = 0
     while True:
-        seed = "".join(choice(digits) for _ in range(13))
-        url = (
-            f"{_SGS_BASE}?random={seed}&index=opp"
-            f"&page={page}&sort=-modifiedDate&size=1000"
-            f"&mode=search&responseType=json&qMode={q_mode}&is_active=true"
-        )
-        if posted_from:
-            url += f"&modified_date.from={_to_iso(posted_from)}"
-        if posted_to:
-            url += f"&modified_date.to={_to_iso(posted_to)}"
-        url += f"&q={q}"
-        if ptype:
-            url += f"&notice_type={ptype}"
+        url = make_sgs_url(params, page)
+        if page == 0 and progress:
+            progress(f"  Parsed params: {params}")
+            progress(f"  SGS query:     {url}")
 
         resp = httpx.get(url, timeout=30)
         resp.raise_for_status()
@@ -87,98 +112,28 @@ def search(
         time.sleep(_PAGE_DELAY)
 
 
-def _get(url: str, params: dict[str, Any]) -> requests.Response:
-    """GET with automatic retry on 429 rate-limit responses."""
-    import sys
-    from datetime import datetime, timedelta, timezone
-    from email.utils import parsedate_to_datetime
-
-    while True:
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code == 429:
-            raw = resp.headers.get("Retry-After", "")
-            resume = None
-            try:
-                resume = datetime.now(timezone.utc) + timedelta(seconds=float(raw))
-            except (ValueError, TypeError):
-                try:
-                    resume = parsedate_to_datetime(raw)
-                except Exception:
-                    pass
-            if resume:
-                print(f"SAM.gov rate limited — come back at {resume.astimezone().strftime('%H:%M')}")
-            else:
-                print("SAM.gov rate limited — quota exhausted, try again later")
-            sys.exit(1)
-        return resp
-
-
-def fetch_description(api_key: str, notice_id: str) -> str:
-    """Fetch the full description HTML for an opportunity."""
-    resp = _get(
-        "https://api.sam.gov/prod/opportunities/v1/noticedesc",
-        {"api_key": api_key, "noticeid": notice_id},
-    )
-    if not resp.ok:
-        return ""
-    try:
-        return resp.json().get("description", "")
-    except Exception:
-        return resp.text
-
-
-def fetch_by_id(api_key: str, notice_id: str) -> Optional[dict[str, Any]]:
-    """Fetch a single opportunity by notice ID via the official API."""
-    today = date.today()
-    year_ago = today - timedelta(days=364)
-    resp = _get(
-        _API_BASE,
-        {
-            "api_key": api_key,
-            "noticeid": notice_id,
-            "postedFrom": year_ago.strftime("%m/%d/%Y"),
-            "postedTo": today.strftime("%m/%d/%Y"),
-            "limit": 1,
-        },
-    )
-    resp.raise_for_status()
-    opps = resp.json().get("opportunitiesData", [])
-    if not opps:
-        return None
-    opp = opps[0]
-    # Official API returns description as a URL to a separate endpoint — fetch the real text
-    desc = opp.get("description", "")
-    if desc.startswith("http"):
-        try:
-            desc_resp = _get(desc, {"api_key": api_key})
-            if desc_resp.ok:
-                opp["description"] = desc_resp.text
-        except Exception:
-            opp["description"] = ""
-    return opp
-
 
 def _normalize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert an SGS result to the same shape as the official API response."""
-    org_hierarchy = item.get("organizationHierarchy") or []
+    org_hierarchy: list[dict[str, Any]] = item.get("organizationHierarchy") or []
 
-    department = next(
+    department: str = next(
         (o["name"] for o in org_hierarchy if o.get("level") == 1), ""
     )
-    office_org = next(
+    office_org: Optional[dict[str, Any]] = next(
         (o for o in reversed(org_hierarchy) if o.get("type") == "OFFICE"), None
     )
     office_address = ""
     if office_org:
-        addr = office_org.get("address", {})
-        parts = [addr.get("city"), addr.get("state"), addr.get("zip")]
+        addr: dict[str, Any] = office_org.get("address") or {}
+        parts: list[str] = [addr.get("city", ""), addr.get("state", ""), addr.get("zip", "")]
         office_address = ", ".join(p for p in parts if p)
 
-    descriptions = item.get("descriptions", [])
-    description = descriptions[0].get("content", "") if descriptions else ""
+    descriptions: list[dict[str, Any]] = item.get("descriptions") or []
+    description: str = descriptions[0].get("content", "") if descriptions else ""
 
     opp_type = item.get("type", {})
-    type_value = (
+    type_value: str = (
         opp_type.get("value", opp_type.get("code", ""))
         if isinstance(opp_type, dict)
         else str(opp_type)

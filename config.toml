@@ -1,22 +1,22 @@
 [app]
-# profile = "km"   # run only this named profile
-# query_only = true         # test queries without syncing to writers
+profile = "gis"       # run only this named profile
+# query_only = true    # test queries without syncing to writers
 
 [ollama]
 host = "http://machine3.local:11434"
 model = "gemma4"
 
-[[searches]]
+[[search]]
 name               = "gis"
-query              = "gis"
+url                = "https://sam.gov/search/?index=ac&page=1&pageSize=25&sort=-modifiedDate&sfm%5Bstatus%5D%5Bis_active%5D=true&sfm%5Bstatus%5D%5Bis_inactive%5D=false&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5BsimpleSearch%5D%5BkeywordTags%5D%5B0%5D%5Bvalue%5D=gis"
 days_back          = 90
-discord_channel_id = "1506436270887534622"
-# sharepoint_list_id = ""
+# discord_channel_id = "1506436270887534622"
+sharepoint_list_id = "0c7ed0ce-b5c3-4530-b8b6-41602befddb4"
 
-[[searches]]
+[[search]]
 name               = "km"
-query              = "\"knowledge management\""
-q_mode             = "EXACT"
+url                = "https://sam.gov/search/?index=ac&page=1&pageSize=25&sort=-modifiedDate&sfm%5Bstatus%5D%5Bis_active%5D=true&sfm%5Bstatus%5D%5Bis_inactive%5D=false&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5BsimpleSearch%5D%5BkeywordTags%5D%5B0%5D%5Bkey%5D=%22knowledge%20management%22&sfm%5BsimpleSearch%5D%5BkeywordTags%5D%5B0%5D%5Bvalue%5D=%22knowledge%20management%22&sfm%5BsimpleSearch%5D%5BkeywordEditorTextarea%5D="
 days_back          = 90
-discord_channel_id = "1507112391467335792"
-# sharepoint_list_id = ""
+# discord_channel_id = "1507112391467335792"
+sharepoint_list_id = "c4082492-6bcc-4322-88ce-6973904ef493"
+
